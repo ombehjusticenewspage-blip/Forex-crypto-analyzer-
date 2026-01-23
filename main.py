@@ -19,40 +19,31 @@ UTC = pytz.UTC
 
 portfolio = {}
 
-def fetch_twelvedata(symbol, interval="5min", outputsize=500):
+def fetch_twelvedata(symbol, interval="15min", outputsize=1000, retries=3):
     url = "https://api.twelvedata.com/time_series"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "outputsize": outputsize,
-        "apikey": TWELVE_API
-    }
-    try:
-        r = requests.get(url, params=params, timeout=10).json()
-        if "values" not in r:
-            return pd.DataFrame(columns=["o","h","l","c","v"])
-        df = pd.DataFrame(r["values"])
-        df = df.rename(columns={
-            "datetime":"time",
-            "open":"o",
-            "high":"h",
-            "low":"l",
-            "close":"c",
-            "volume":"v"
-        })
-        df[["o","h","l","c","v"]] = df[["o","h","l","c","v"]].astype(float)
-        df = df.sort_values("time")
-        return df
-    except:
-        return pd.DataFrame(columns=["o","h","l","c","v"])
+    params = {"symbol": symbol, "interval": interval, "outputsize": outputsize, "apikey": TWELVE_API}
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, params=params, timeout=10).json()
+            if "values" not in r:
+                continue
+            df = pd.DataFrame(r["values"])
+            df = df.rename(columns={"datetime":"time","open":"o","high":"h","low":"l","close":"c","volume":"v"})
+            df[["o","h","l","c","v"]] = df[["o","h","l","c","v"]].apply(pd.to_numeric, errors="coerce")
+            df = df.dropna().sort_values("time").reset_index(drop=True)
+            if len(df) >= 30:
+                return df
+        except:
+            continue
+    return pd.DataFrame(columns=["o","h","l","c","v"])
 
-def crypto_data(sym, tf, l=500):
+def crypto_data(sym, tf="15min"):
     symbol_td = sym[:3] + "/" + sym[3:]
-    return fetch_twelvedata(symbol_td, tf, l)
+    return fetch_twelvedata(symbol_td, tf)
 
-def forex_data(pair, tf):
+def forex_data(pair, tf="15min"):
     symbol_td = pair[:3] + "/" + pair[3:]
-    return fetch_twelvedata(symbol_td, tf, 500)
+    return fetch_twelvedata(symbol_td, tf)
 
 def news_sentiment(symbol):
     try:
@@ -85,7 +76,6 @@ class MarketAI:
         self.window = window
         self.scaler = MinMaxScaler()
         self.model = self.load_or_create()
-
     def load_or_create(self):
         if os.path.exists(MODEL_PATH):
             try: return load_model(MODEL_PATH)
@@ -98,7 +88,6 @@ class MarketAI:
         ])
         model.compile(optimizer="adam", loss="binary_crossentropy")
         return model
-
     def features(self, df):
         df = df.copy()
         df["r"] = df["c"].pct_change()
@@ -108,7 +97,6 @@ class MarketAI:
         df["ed"] = df["c"] - df["ema"]
         df = df.dropna()
         return df[["r","v","rsi","ed","c"]]
-
     def prepare(self, df):
         f = self.features(df)
         if len(f) <= self.window: return None, None
@@ -118,13 +106,11 @@ class MarketAI:
             X.append(s[i-self.window:i])
             y.append(1 if f["c"].iloc[i+1] > f["c"].iloc[i] else 0)
         return np.array(X), np.array(y)
-
     def train_daily(self, df):
         X, y = self.prepare(df)
         if X is None or len(X)==0: return
         self.model.fit(X, y, epochs=3, batch_size=8, verbose=0)
         self.model.save(MODEL_PATH)
-
     def predict(self, df):
         f = self.features(df)
         if len(f) < self.window: return None
@@ -148,29 +134,37 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asset = q.data
     is_crypto = asset in CRYPTO
     await q.edit_message_text(f"🔍 Analyzing {asset}...\nPlease wait ⏳")
-    df = crypto_data(asset,"5min") if is_crypto else forex_data(asset,"5min")
-    df = enrich(df)
-    if len(df) < 30:
-        df = crypto_data(asset,"5min") if is_crypto else forex_data(asset,"5min")
+
+    intervals = ["15min", "30min", "1h"]
+    df = pd.DataFrame()
+    for interval in intervals:
+        df = crypto_data(asset, interval) if is_crypto else forex_data(asset, interval)
         df = enrich(df)
-        if len(df) < 30:
-            await q.edit_message_text("❌ Market data still loading, try again shortly")
-            return
+        if len(df) >= 30:
+            break
+
+    if len(df) < 30:
+        await q.edit_message_text("❌ Market data still loading, try again shortly")
+        return
+
     ai = MarketAI()
     ai.train_daily(df)
     prob = ai.predict(df)
     if prob is None:
         await q.edit_message_text("❌ Analysis incomplete, retry")
         return
+
     news = news_sentiment(asset)
     decision, confidence = RLTrader().decide(prob, news)
     if decision == "NO TRADE":
         await q.edit_message_text("⚠️ No high-probability trade found")
         return
+
     price = df["c"].iloc[-1]
     atr = df["ATR"].iloc[-1]
     sl = price - atr if decision=="BUY" else price + atr
     tp = price + atr*2 if decision=="BUY" else price - atr*2
+
     await q.edit_message_text(
         f"🧠 AI Hedge Fund Trade Plan\n\n"
         f"Asset: {asset}\n"
