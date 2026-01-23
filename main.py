@@ -9,7 +9,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 
 TOKEN = "8543111323:AAHcBtUS7dZsBl2bG74HhmPPyIoectRw8xo"
 NEWS_API = "332bf45035354091b59f1f64601e2e11"
-UNIRATE_API = "PUT_YOUR_UNIRATE_KEY_HERE"
+UNIRATE_API = "gc17dFNFBZb37YbtLJhtCZhsiBvQe00AVWE9ozhorMzKccCZx7je0yPA4H9NDqye"
 
 MODEL_PATH = "ai_model_portfolio.h5"
 
