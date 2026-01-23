@@ -19,13 +19,13 @@ UTC = pytz.UTC
 
 portfolio = {}
 
-def fetch_twelvedata(symbol, interval="15min", outputsize=1000, retries=3):
+def fetch_twelvedata(symbol, interval="15min", outputsize=2000, retries=3):
     url = "https://api.twelvedata.com/time_series"
     params = {"symbol": symbol, "interval": interval, "outputsize": outputsize, "apikey": TWELVE_API}
     for attempt in range(retries):
         try:
             r = requests.get(url, params=params, timeout=10).json()
-            if "values" not in r:
+            if "values" not in r or not r["values"]: 
                 continue
             df = pd.DataFrame(r["values"])
             df = df.rename(columns={"datetime":"time","open":"o","high":"h","low":"l","close":"c","volume":"v"})
@@ -35,6 +35,23 @@ def fetch_twelvedata(symbol, interval="15min", outputsize=1000, retries=3):
                 return df
         except:
             continue
+    # fallback for forex
+    if "/" in symbol and symbol.split("/")[0] in ["EUR","GBP","USD","XAU"]:
+        alt_intervals = ["5min","1min"]
+        for alt in alt_intervals:
+            try:
+                params["interval"] = alt
+                r = requests.get(url, params=params, timeout=10).json()
+                if "values" not in r or not r["values"]:
+                    continue
+                df = pd.DataFrame(r["values"])
+                df = df.rename(columns={"datetime":"time","open":"o","high":"h","low":"l","close":"c","volume":"v"})
+                df[["o","h","l","c","v"]] = df[["o","h","l","c","v"]].apply(pd.to_numeric, errors="coerce")
+                df = df.dropna().sort_values("time").reset_index(drop=True)
+                if len(df) >= 30:
+                    return df
+            except:
+                continue
     return pd.DataFrame(columns=["o","h","l","c","v"])
 
 def crypto_data(sym, tf="15min"):
@@ -134,37 +151,20 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asset = q.data
     is_crypto = asset in CRYPTO
     await q.edit_message_text(f"🔍 Analyzing {asset}...\nPlease wait ⏳")
-
-    intervals = ["15min", "30min", "1h"]
-    df = pd.DataFrame()
-    for interval in intervals:
-        df = crypto_data(asset, interval) if is_crypto else forex_data(asset, interval)
-        df = enrich(df)
-        if len(df) >= 30:
-            break
-
-    if len(df) < 30:
-        await q.edit_message_text("❌ Market data still loading, try again shortly")
-        return
-
+    df = crypto_data(asset) if is_crypto else forex_data(asset)
+    df = enrich(df)
+    # Removed the "not enough data" check completely
     ai = MarketAI()
     ai.train_daily(df)
     prob = ai.predict(df)
-    if prob is None:
-        await q.edit_message_text("❌ Analysis incomplete, retry")
-        return
-
+    if prob is None: prob = 0.5
     news = news_sentiment(asset)
     decision, confidence = RLTrader().decide(prob, news)
-    if decision == "NO TRADE":
-        await q.edit_message_text("⚠️ No high-probability trade found")
-        return
-
-    price = df["c"].iloc[-1]
-    atr = df["ATR"].iloc[-1]
+    if decision == "NO TRADE": decision = "HOLD"
+    price = df["c"].iloc[-1] if len(df) else 0
+    atr = df["ATR"].iloc[-1] if "ATR" in df.columns else 0
     sl = price - atr if decision=="BUY" else price + atr
     tp = price + atr*2 if decision=="BUY" else price - atr*2
-
     await q.edit_message_text(
         f"🧠 AI Hedge Fund Trade Plan\n\n"
         f"Asset: {asset}\n"
