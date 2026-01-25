@@ -6,40 +6,47 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-TOKEN = "8543111323:AAHcBtUS7dZsBl2bG74HhmPPyIoectRw8xo"
+TOKEN = "8516981161:AAFbLbt8YDXk3qAXsd1t66ZL4IGP8Zxxmkc"
 NEWS_API = "332bf45035354091b59f1f64601e2e11"
-UNIRATE_API = "gc17dFNFBZb37YbtLJhtCZhsiBvQe00AVWE9ozhorMzKccCZx7je0yPA4H9NDqye"
+BINANCE_API_KEY ="gD3Prl4zcqEsx8sXvC09XAxlJXGDqMNZ28j6ol43x0mTbtO88XzuHWUHACtMoUto"
+
 
 MODEL_PATH = "ai_model_portfolio.h5"
 
-CRYPTO = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT"]
-FOREX = ["EURUSD","GBPUSD","USDJPY","XAUUSD"]
+CRYPTO = [
+    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT",
+    "AVAXUSDT","DOTUSDT","TRXUSDT","MATICUSDT","LINKUSDT","LTCUSDT","ATOMUSDT",
+    "ETCUSDT","FILUSDT","NEARUSDT","APTUSDT","ARBUSDT","OPUSDT","SUIUSDT",
+    "AAVEUSDT","UNIUSDT","INJUSDT","RNDRUSDT","IMXUSDT","STXUSDT","HBARUSDT",
+    "ICPUSDT","VETUSDT","THETAUSDT","EGLDUSDT","ALGOUSDT","FLOWUSDT",
+    "GRTUSDT","KAVAUSDT","FTMUSDT","RUNEUSDT","MINAUSDT","DYDXUSDT",
+    "WAVESUSDT","ZILUSDT","ENJUSDT","SANDUSDT","MANAUSDT","AXSUSDT",
+    "CHZUSDT","CAKEUSDT"
+]
 
-def fetch_unirate(symbol):
-    url = "https://api.unirate.io/v1/market/candles"
+HEADERS = {
+    "X-MBX-APIKEY": BINANCE_API_KEY
+}
+
+def fetch_binance(symbol, interval="15m", limit=500):
+    url = "https://api.binance.com/api/v3/klines"
     params = {
         "symbol": symbol,
-        "interval": "15m",
-        "limit": 600,
-        "apikey": UNIRATE_API
+        "interval": interval,
+        "limit": limit
     }
-    try:
-        r = requests.get(url, params=params, timeout=10).json()
-        data = r.get("data", [])
-        if len(data) < 60:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(data)
-        df.rename(columns={
-            "open":"o","high":"h","low":"l",
-            "close":"c","volume":"v","timestamp":"time"
-        }, inplace=True)
-
-        df["time"] = pd.to_datetime(df["time"], unit="s")
-        df[["o","h","l","c","v"]] = df[["o","h","l","c","v"]].astype(float)
-        return df.sort_values("time").reset_index(drop=True)
-    except:
+    r = requests.get(url, params=params, headers=HEADERS, timeout=10).json()
+    if not isinstance(r, list) or len(r) < 50:
         return pd.DataFrame()
+
+    df = pd.DataFrame(r, columns=[
+        "time","o","h","l","c","v",
+        "_","_","_","_","_","_"
+    ])
+    df = df[["time","o","h","l","c","v"]]
+    df["time"] = pd.to_datetime(df["time"], unit="ms")
+    df[["o","h","l","c","v"]] = df[["o","h","l","c","v"]].astype(float)
+    return df.sort_values("time").reset_index(drop=True)
 
 def news_sentiment(symbol):
     try:
@@ -52,16 +59,13 @@ def news_sentiment(symbol):
         articles = r.get("articles",[])
         if not articles:
             return 0
-        return sum(TextBlob(a.get("title","")).sentiment.polarity for a in articles) / len(articles)
+        return sum(TextBlob(a["title"]).sentiment.polarity for a in articles) / len(articles)
     except:
         return 0
 
 def enrich(df):
-    if len(df) < 60:
-        return pd.DataFrame()
-
-    df["EMA20"] = ta.trend.EMAIndicator(df["c"],20).ema_indicator()
     df["RSI"] = ta.momentum.RSIIndicator(df["c"],14).rsi()
+    df["EMA"] = ta.trend.EMAIndicator(df["c"],20).ema_indicator()
     df["ATR"] = ta.volatility.AverageTrueRange(df["h"],df["l"],df["c"],14).average_true_range()
     return df.dropna()
 
@@ -73,10 +77,7 @@ class MarketAI:
 
     def load_or_create(self):
         if os.path.exists(MODEL_PATH):
-            try:
-                return load_model(MODEL_PATH)
-            except:
-                os.remove(MODEL_PATH)
+            return load_model(MODEL_PATH)
         model = Sequential([
             LSTM(64, return_sequences=True, input_shape=(self.window,5)),
             Dropout(0.2),
@@ -87,30 +88,23 @@ class MarketAI:
         return model
 
     def features(self, df):
-        df = df.copy()
         df["r"] = df["c"].pct_change()
         df["v"] = df["r"].rolling(10).std()
-        df["rsi"] = ta.momentum.RSIIndicator(df["c"],14).rsi()
-        df["ema"] = ta.trend.EMAIndicator(df["c"],20).ema_indicator()
-        df["ed"] = df["c"] - df["ema"]
-        return df.dropna()[["r","v","rsi","ed","c"]]
+        df["ed"] = df["c"] - df["EMA"]
+        df = df.dropna()
+        return df[["r","v","RSI","ed","c"]]
 
-    def prepare(self, df):
+    def train(self, df):
         f = self.features(df)
         if len(f) <= self.window:
-            return None, None
+            return
         s = self.scaler.fit_transform(f)
         X, y = [], []
         for i in range(self.window, len(s)-1):
             X.append(s[i-self.window:i])
             y.append(1 if f["c"].iloc[i+1] > f["c"].iloc[i] else 0)
-        return np.array(X), np.array(y)
-
-    def train(self, df):
-        X, y = self.prepare(df)
-        if X is None:
-            return
-        self.model.fit(X, y, epochs=2, batch_size=8, verbose=0)
+        X, y = np.array(X), np.array(y)
+        self.model.fit(X, y, epochs=3, batch_size=8, verbose=0)
         self.model.save(MODEL_PATH)
 
     def predict(self, df):
@@ -121,41 +115,42 @@ class MarketAI:
         X = np.array([s[-self.window:]])
         return float(self.model.predict(X, verbose=0)[0][0])
 
-class RLTrader:
+class Trader:
     def decide(self, prob, news):
         score = abs(prob-0.5)*2 + abs(news)
-        if score < 0.55:
+        if score < 0.6:
             return "HOLD", score
         return ("BUY" if prob > 0.5 else "SELL"), score
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton(a, callback_data=a)] for a in sorted(CRYPTO+FOREX)]
-    await update.message.reply_text("Select Asset for AI Trading", reply_markup=InlineKeyboardMarkup(kb))
+    kb = [[InlineKeyboardButton(a, callback_data=a)] for a in CRYPTO]
+    await update.message.reply_text("Select Crypto Asset", reply_markup=InlineKeyboardMarkup(kb))
 
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     asset = q.data
-    await q.edit_message_text(f"🔍 Analyzing {asset}...\nPlease wait ⏳")
+    await q.edit_message_text(f"🔍 Analyzing {asset}…")
 
-    df = fetch_unirate(asset)
-    df = enrich(df)
-
+    df = fetch_binance(asset)
     if df.empty:
-        await q.edit_message_text(f"{asset}\n❌ Market data unavailable right now")
+        await q.edit_message_text("❌ Market data unavailable")
         return
+
+    df = enrich(df)
 
     ai = MarketAI()
     ai.train(df)
     prob = ai.predict(df)
     news = news_sentiment(asset)
-    decision, confidence = RLTrader().decide(prob, news)
 
-    price = float(df["c"].iloc[-1])
-    atr = float(df["ATR"].iloc[-1])
+    decision, confidence = Trader().decide(prob, news)
 
-    sl = price - atr if decision=="BUY" else price + atr
-    tp = price + atr*2 if decision=="BUY" else price - atr*2
+    price = df["c"].iloc[-1]
+    atr = df["ATR"].iloc[-1]
+
+    sl = price - atr if decision == "BUY" else price + atr
+    tp = price + atr*2 if decision == "BUY" else price - atr*2
 
     await q.edit_message_text(
         f"🧠 AI Hedge Fund Trade Plan\n\n"
@@ -168,7 +163,7 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Confidence: {round(confidence*100,1)}%"
     )
 
-if __name__=="__main__":
+if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(analyze))
