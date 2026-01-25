@@ -8,8 +8,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 
 TOKEN = "8516981161:AAFbLbt8YDXk3qAXsd1t66ZL4IGP8Zxxmkc"
 NEWS_API = "332bf45035354091b59f1f64601e2e11"
-BINANCE_API_KEY ="gD3Prl4zcqEsx8sXvC09XAxlJXGDqMNZ28j6ol43x0mTbtO88XzuHWUHACtMoUto"
-
+BINANCE_API_KEY = "gD3Prl4zcqEsx8sXvC09XAxlJXGDqMNZ28j6ol43x0mTbtO88XzuHWUHACtMoUto"
 
 MODEL_PATH = "ai_model_portfolio.h5"
 
@@ -24,10 +23,6 @@ CRYPTO = [
     "CHZUSDT","CAKEUSDT"
 ]
 
-HEADERS = {
-    "X-MBX-APIKEY": BINANCE_API_KEY
-}
-
 def fetch_binance(symbol, interval="15m", limit=500):
     url = "https://api.binance.com/api/v3/klines"
     params = {
@@ -35,28 +30,32 @@ def fetch_binance(symbol, interval="15m", limit=500):
         "interval": interval,
         "limit": limit
     }
-    r = requests.get(url, params=params, headers=HEADERS, timeout=10).json()
-    if not isinstance(r, list) or len(r) < 50:
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, list) or len(data) < 100:
+            return pd.DataFrame()
+        df = pd.DataFrame(data, columns=[
+            "time","o","h","l","c","v",
+            "ct","qav","trades","tb","tq","ignore"
+        ])
+        df = df[["time","o","h","l","c","v"]]
+        df["time"] = pd.to_datetime(df["time"], unit="ms")
+        df[["o","h","l","c","v"]] = df[["o","h","l","c","v"]].astype(float)
+        return df.reset_index(drop=True)
+    except:
         return pd.DataFrame()
-
-    df = pd.DataFrame(r, columns=[
-        "time","o","h","l","c","v",
-        "_","_","_","_","_","_"
-    ])
-    df = df[["time","o","h","l","c","v"]]
-    df["time"] = pd.to_datetime(df["time"], unit="ms")
-    df[["o","h","l","c","v"]] = df[["o","h","l","c","v"]].astype(float)
-    return df.sort_values("time").reset_index(drop=True)
 
 def news_sentiment(symbol):
     try:
         q = symbol.replace("USDT","")
         r = requests.get(
             "https://newsapi.org/v2/everything",
-            params={"q": q, "language": "en", "apiKey": NEWS_API,"pageSize":5},
+            params={"q": q, "language": "en", "apiKey": NEWS_API, "pageSize": 5},
             timeout=10
         ).json()
-        articles = r.get("articles",[])
+        articles = r.get("articles", [])
         if not articles:
             return 0
         return sum(TextBlob(a["title"]).sentiment.polarity for a in articles) / len(articles)
@@ -64,9 +63,9 @@ def news_sentiment(symbol):
         return 0
 
 def enrich(df):
-    df["RSI"] = ta.momentum.RSIIndicator(df["c"],14).rsi()
-    df["EMA"] = ta.trend.EMAIndicator(df["c"],20).ema_indicator()
-    df["ATR"] = ta.volatility.AverageTrueRange(df["h"],df["l"],df["c"],14).average_true_range()
+    df["RSI"] = ta.momentum.RSIIndicator(df["c"], 14).rsi()
+    df["EMA"] = ta.trend.EMAIndicator(df["c"], 20).ema_indicator()
+    df["ATR"] = ta.volatility.AverageTrueRange(df["h"], df["l"], df["c"], 14).average_true_range()
     return df.dropna()
 
 class MarketAI:
@@ -117,10 +116,12 @@ class MarketAI:
 
 class Trader:
     def decide(self, prob, news):
-        score = abs(prob-0.5)*2 + abs(news)
-        if score < 0.6:
+        score = abs(prob - 0.5) * 2 + abs(news)
+        if score < 0.35:
             return "HOLD", score
         return ("BUY" if prob > 0.5 else "SELL"), score
+
+AI_ENGINE = MarketAI()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton(a, callback_data=a)] for a in CRYPTO]
@@ -139,9 +140,8 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     df = enrich(df)
 
-    ai = MarketAI()
-    ai.train(df)
-    prob = ai.predict(df)
+    AI_ENGINE.train(df)
+    prob = AI_ENGINE.predict(df)
     news = news_sentiment(asset)
 
     decision, confidence = Trader().decide(prob, news)
@@ -167,5 +167,4 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(analyze))
-    print("Bot running")
     app.run_polling()
