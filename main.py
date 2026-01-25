@@ -24,7 +24,7 @@ CRYPTO = [
 ]
 
 def fetch_binance(symbol, interval="15m", limit=500):
-    url = "https://api.binance.com/api/v3/klines"
+    url = url = "https://data.binance.vision/api/v3/klines"
     params = {
         "symbol": symbol,
         "interval": interval,
