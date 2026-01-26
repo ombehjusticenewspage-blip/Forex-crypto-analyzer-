@@ -11,7 +11,7 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TOKEN = "8516981161:AAFbLbt8YDXk3qAXsd1t66ZL4IGP8Zxxmkc"
 NEWS_API = "YOUR_NEWS_API_KEY"
 MODEL_PATH = "ai_model_portfolio.h5"
 
