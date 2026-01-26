@@ -8,8 +8,6 @@ from binance.client import Client
 
 BINANCE_API_KEY = "DmIS0QxaE6XsUnVCgpewCV4KdFuxFjmQhfhm2YRIiyPQsRQ6vcl1QTp1tWpxLN3Z"        
 
-binance = Client(KRDBzIVMIVa0kG0vdfu4q8d7CBB6bOYi9e7tWBKB0IAbxPwbkCavlmpNBGaxmt8J)
-
 def fetch_binance_ohlcv(symbol='BTCUSDT', interval='5m', limit=200):
     try:
         klines = binance.get_klines(symbol=symbol, interval=interval, limit=limit)
