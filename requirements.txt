@@ -1,5 +1,5 @@
 python-telegram-bot==20.5
-python-binace
+python-binance
 numpy
 pandas
 ta
