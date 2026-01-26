@@ -8,44 +8,64 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 
 TOKEN = "8516981161:AAFbLbt8YDXk3qAXsd1t66ZL4IGP8Zxxmkc"
 NEWS_API = "332bf45035354091b59f1f64601e2e11"
-BINANCE_API_KEY = "gD3Prl4zcqEsx8sXvC09XAxlJXGDqMNZ28j6ol43x0mTbtO88XzuHWUHACtMoUto"
 
 MODEL_PATH = "ai_model_portfolio.h5"
 
-CRYPTO = [
-    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT",
-    "AVAXUSDT","DOTUSDT","TRXUSDT","MATICUSDT","LINKUSDT","LTCUSDT","ATOMUSDT",
-    "ETCUSDT","FILUSDT","NEARUSDT","APTUSDT","ARBUSDT","OPUSDT","SUIUSDT",
-    "AAVEUSDT","UNIUSDT","INJUSDT","RNDRUSDT","IMXUSDT","STXUSDT","HBARUSDT",
-    "ICPUSDT","VETUSDT","THETAUSDT","EGLDUSDT","ALGOUSDT","FLOWUSDT",
-    "GRTUSDT","KAVAUSDT","FTMUSDT","RUNEUSDT","MINAUSDT","DYDXUSDT",
-    "WAVESUSDT","ZILUSDT","ENJUSDT","SANDUSDT","MANAUSDT","AXSUSDT",
-    "CHZUSDT","CAKEUSDT"
-]
+CRYPTO_MAP = {
+    "BTCUSDT": "bitcoin",
+    "ETHUSDT": "ethereum",
+    "BNBUSDT": "binancecoin",
+    "SOLUSDT": "solana",
+    "XRPUSDT": "ripple",
+    "ADAUSDT": "cardano",
+    "DOGEUSDT": "dogecoin",
+    "AVAXUSDT": "avalanche-2",
+    "DOTUSDT": "polkadot",
+    "TRXUSDT": "tron",
+    "MATICUSDT": "polygon",
+    "LINKUSDT": "chainlink",
+    "LTCUSDT": "litecoin",
+    "ATOMUSDT": "cosmos",
+    "ETCUSDT": "ethereum-classic",
+    "FILUSDT": "filecoin",
+    "NEARUSDT": "near",
+    "APTUSDT": "aptos",
+    "ARBUSDT": "arbitrum",
+    "OPUSDT": "optimism",
+    "SUIUSDT": "sui",
+    "AAVEUSDT": "aave",
+    "UNIUSDT": "uniswap",
+    "INJUSDT": "injective",
+    "RNDRUSDT": "render-token",
+    "IMXUSDT": "immutable-x",
+    "STXUSDT": "stacks",
+    "HBARUSDT": "hedera",
+    "ICPUSDT": "internet-computer",
+    "VETUSDT": "vechain"
+}
 
-def fetch_binance(symbol, interval="15m", limit=500):
-    url = url = "https://data.binance.vision/api/v3/klines"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit
-    }
-    try:
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        if not isinstance(data, list) or len(data) < 100:
-            return pd.DataFrame()
-        df = pd.DataFrame(data, columns=[
-            "time","o","h","l","c","v",
-            "ct","qav","trades","tb","tq","ignore"
-        ])
-        df = df[["time","o","h","l","c","v"]]
-        df["time"] = pd.to_datetime(df["time"], unit="ms")
-        df[["o","h","l","c","v"]] = df[["o","h","l","c","v"]].astype(float)
-        return df.reset_index(drop=True)
-    except:
+CRYPTO = list(CRYPTO_MAP.keys())
+
+def fetch_coingecko(symbol):
+    coin_id = CRYPTO_MAP[symbol]
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {"vs_currency": "usd", "days": 7, "interval": "minute"}
+    r = requests.get(url, params=params, timeout=15).json()
+
+    prices = r.get("prices", [])
+    if len(prices) < 200:
         return pd.DataFrame()
+
+    df = pd.DataFrame(prices, columns=["time", "c"])
+    df["time"] = pd.to_datetime(df["time"], unit="ms")
+
+    df["o"] = df["c"].shift(1)
+    df["h"] = df[["o","c"]].max(axis=1)
+    df["l"] = df[["o","c"]].min(axis=1)
+    df["v"] = 1.0
+
+    df = df.dropna().reset_index(drop=True)
+    return df.tail(500)
 
 def news_sentiment(symbol):
     try:
@@ -78,7 +98,7 @@ class MarketAI:
         if os.path.exists(MODEL_PATH):
             return load_model(MODEL_PATH)
         model = Sequential([
-            LSTM(64, return_sequences=True, input_shape=(self.window,5)),
+            LSTM(64, return_sequences=True, input_shape=(self.window, 5)),
             Dropout(0.2),
             LSTM(32),
             Dense(1, activation="sigmoid")
@@ -102,8 +122,7 @@ class MarketAI:
         for i in range(self.window, len(s)-1):
             X.append(s[i-self.window:i])
             y.append(1 if f["c"].iloc[i+1] > f["c"].iloc[i] else 0)
-        X, y = np.array(X), np.array(y)
-        self.model.fit(X, y, epochs=3, batch_size=8, verbose=0)
+        self.model.fit(np.array(X), np.array(y), epochs=3, batch_size=8, verbose=0)
         self.model.save(MODEL_PATH)
 
     def predict(self, df):
@@ -117,11 +136,9 @@ class MarketAI:
 class Trader:
     def decide(self, prob, news):
         score = abs(prob - 0.5) * 2 + abs(news)
-        if score < 0.35:
+        if score < 0.6:
             return "HOLD", score
         return ("BUY" if prob > 0.5 else "SELL"), score
-
-AI_ENGINE = MarketAI()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton(a, callback_data=a)] for a in CRYPTO]
@@ -133,15 +150,12 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asset = q.data
     await q.edit_message_text(f"🔍 Analyzing {asset}…")
 
-    df = fetch_binance(asset)
-    if df.empty:
-        await q.edit_message_text("❌ Market data unavailable")
-        return
-
+    df = fetch_coingecko(asset)
     df = enrich(df)
 
-    AI_ENGINE.train(df)
-    prob = AI_ENGINE.predict(df)
+    ai = MarketAI()
+    ai.train(df)
+    prob = ai.predict(df)
     news = news_sentiment(asset)
 
     decision, confidence = Trader().decide(prob, news)
