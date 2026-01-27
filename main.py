@@ -45,7 +45,6 @@ def fetch_binance_ohlcv(symbol='BTCUSDT', interval='5m', limit=200):
     return df[['time','o','h','l','c','v']]
 
 class DataSource:
-    @staticmethod
     def fetch_crypto(symbol):
         
         if binance is not None:
@@ -94,7 +93,6 @@ class DataSource:
             print(f"[CoinGecko fetch error] {e}")
             return pd.DataFrame()
 
-    @staticmethod
     def fetch_forex(symbol):
         if symbol not in FOREX:
             print(f"[fetch_forex] Symbol {symbol} not in FOREX")
@@ -131,7 +129,7 @@ class DataSource:
             print(f"[Forex fetch error] {e}")
             return pd.DataFrame()
 
-   @staticmethod
+ 
      def fetch(symbol):
         if symbol in CRYPTOS:
             return DataSource.fetch_crypto(symbol)
@@ -141,7 +139,6 @@ class DataSource:
             print(f"[fetch] Unknown symbol: {symbol}")
             return pd.DataFrame()
 
-    @staticmethod
     def diagnose(symbol):
         """Return a short multi-line diagnostic string explaining why fetch would fail/succeed."""
         parts = []
@@ -186,7 +183,7 @@ class DataSource:
         return "\n".join(parts)
 
 class NewsSentiment:
-     @staticmethod
+
      def score(symbol):
         name = symbol.replace("USDT","").replace("=","")
         if not NEWS_API_KEY:
@@ -210,7 +207,7 @@ class NewsSentiment:
             return 0
 
 class Indicators:
-@staticmethod
+    
     def enrich(df):
         if df.empty:
             print("[Indicators] Input DF is empty")
@@ -231,7 +228,7 @@ class Indicators:
             return pd.DataFrame()
 
 class SignalEngine:
-    @staticmethod
+    
     def generate(df, sentiment):
         if df.empty or df.shape[0] < 2:
             print("[SignalEngine] Insufficient indicator-enriched data")
@@ -255,7 +252,7 @@ class SignalEngine:
 
 class TradeMonitor:
     open_trades = {}
-    @classmethod
+    
     async def watch(cls, asset, user_id, context):
         if asset not in cls.open_trades: return
         plan = cls.open_trades[asset]
