@@ -1,4 +1,3 @@
-
 import os
 import asyncio
 import requests
@@ -13,7 +12,7 @@ from binance.client import Client
 BINANCE_API_KEY = "DmIS0QxaE6XsUnVCgpewCV4KdFuxFjmQhfhm2YRIiyPQsRQ6vcl1QTp1tWpxLN3Z"
 BINANCE_API_SECRET = "KRDBzIVMIVa0kG0vdfu4q8d7CBB6bOYi9e7tWBKB0IAbxPwbkCavlmpNBGaxmt8J"
 TELEGRAM_TOKEN = "8543111323:AAHcBtUS7dZsBl2bG74HhmPPyIoectRw8xo"
-NEWS_API_KEY= "ca1acbf0cedb4488b130c59252891c5e"
+NEWS_API_KEY = "ca1acbf0cedb4488b130c59252891c5e"
 MONITOR_INTERVAL = "90"
 
 binance = None
@@ -46,7 +45,6 @@ def fetch_binance_ohlcv(symbol='BTCUSDT', interval='5m', limit=200):
 
 class DataSource:
     def fetch_crypto(symbol):
-        
         if binance is not None:
             try:
                 df = fetch_binance_ohlcv(symbol, interval='5m', limit=200)
@@ -129,20 +127,19 @@ class DataSource:
             print(f"[Forex fetch error] {e}")
             return pd.DataFrame()
 
- 
-     def fetch(symbol):
-    if symbol in CRYPTOS:
-        return DataSource.fetch_crypto(symbol)
-    elif symbol in FOREX:
-        return DataSource.fetch_forex(symbol)
-    else:
-        print(f"[fetch] Unknown symbol: {symbol}")
-        return pd.DataFrame()
+    def fetch(symbol):
+        if symbol in CRYPTOS:
+            return DataSource.fetch_crypto(symbol)
+        elif symbol in FOREX:
+            return DataSource.fetch_forex(symbol)
+        else:
+            print(f"[fetch] Unknown symbol: {symbol}")
+            return pd.DataFrame()
 
+    @staticmethod
     def diagnose(symbol):
         """Return a short multi-line diagnostic string explaining why fetch would fail/succeed."""
         parts = []
-        
         if symbol in CRYPTOS:
             if binance is None:
                 parts.append("Binance: disabled (no API key configured)")
@@ -152,7 +149,6 @@ class DataSource:
                     parts.append(f"Binance: OK ({len(kl)} klines)")
                 except Exception as e:
                     parts.append(f"Binance: ERROR - {e}")
-
             try:
                 coin_id = CRYPTOS[symbol]
                 url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
@@ -161,7 +157,6 @@ class DataSource:
             except Exception as e:
                 parts.append(f"CoinGecko: ERROR - {e}")
         elif symbol in FOREX:
-
             try:
                 url = f"https://query1.finance.yahoo.com/v8/finance/chart/{FOREX[symbol]}"
                 r = requests.get(url, params={"interval":"5m","range":"1d"}, timeout=10)
@@ -171,7 +166,6 @@ class DataSource:
                 parts.append(f"Yahoo: ERROR - {e}")
         else:
             parts.append("Unknown symbol (not configured in CRYPTOS or FOREX).")
-        
         if NEWS_API_KEY:
             try:
                 r = requests.get("https://newsapi.org/v2/everything", params={"q":"bitcoin","pageSize":1,"apiKey":NEWS_API_KEY}, timeout=7)
@@ -183,8 +177,7 @@ class DataSource:
         return "\n".join(parts)
 
 class NewsSentiment:
-
-     def score(symbol):
+    def score(symbol):
         name = symbol.replace("USDT","").replace("=","")
         if not NEWS_API_KEY:
             print("[NewsSentiment] NEWS_API_KEY not configured")
@@ -207,7 +200,6 @@ class NewsSentiment:
             return 0
 
 class Indicators:
-    
     def enrich(df):
         if df.empty:
             print("[Indicators] Input DF is empty")
@@ -228,7 +220,6 @@ class Indicators:
             return pd.DataFrame()
 
 class SignalEngine:
-    
     def generate(df, sentiment):
         if df.empty or df.shape[0] < 2:
             print("[SignalEngine] Insufficient indicator-enriched data")
@@ -252,7 +243,6 @@ class SignalEngine:
 
 class TradeMonitor:
     open_trades = {}
-    
     async def watch(cls, asset, user_id, context):
         if asset not in cls.open_trades: return
         plan = cls.open_trades[asset]
@@ -307,10 +297,9 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(TradeMonitor.watch(asset, user_id, context))
 
 async def diag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
     await update.message.reply_text("Running diagnostics... this may take a few seconds.")
     results = []
-    for sym in list(ALL_ASSETS)[:6]:
+    for sym in list(ALL_ASSETS)[:6]:  
         res = await asyncio.to_thread(DataSource.diagnose, sym)
         results.append(f"{sym}:\n{res}")
     text = "\n\n".join(results)
