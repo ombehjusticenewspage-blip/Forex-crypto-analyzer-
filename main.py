@@ -131,13 +131,13 @@ class DataSource:
 
  
      def fetch(symbol):
-        if symbol in CRYPTOS:
-            return DataSource.fetch_crypto(symbol)
-        elif symbol in FOREX:
-            return DataSource.fetch_forex(symbol)
-        else:
-            print(f"[fetch] Unknown symbol: {symbol}")
-            return pd.DataFrame()
+    if symbol in CRYPTOS:
+        return DataSource.fetch_crypto(symbol)
+    elif symbol in FOREX:
+        return DataSource.fetch_forex(symbol)
+    else:
+        print(f"[fetch] Unknown symbol: {symbol}")
+        return pd.DataFrame()
 
     def diagnose(symbol):
         """Return a short multi-line diagnostic string explaining why fetch would fail/succeed."""
