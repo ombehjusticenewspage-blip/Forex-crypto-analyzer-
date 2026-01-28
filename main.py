@@ -273,7 +273,6 @@ def fetch_yahoo_forex(symbol, diagnostics=None):
         return pd.DataFrame()
 
 class DataSource:
-    @staticmethod
     def fetch_crypto(symbol):
         diagnostics = []
         try:
@@ -329,7 +328,6 @@ class DataSource:
             diagnostics.append(f"synthesis error: {e}")
         return pd.DataFrame(), diagnostics
 
-    @staticmethod
     def fetch_forex(symbol):
         diagnostics = []
         if symbol not in FOREX:
@@ -393,7 +391,6 @@ class DataSource:
             diagnostics.append(f"exchangerate synthesis error: {e}")
         return pd.DataFrame(), diagnostics
 
-    @staticmethod
     def diagnose(symbol):
         parts = []
         if symbol in CRYPTOS:
@@ -442,151 +439,4 @@ class DataSource:
             parts.append("Unknown symbol")
         if NEWS_API_KEY:
             try:
-                r = requests.get("https://newsapi.org/v2/everything", params={"q":"bitcoin","pageSize":1,"apiKey":NEWS_API_KEY}, timeout=6, headers={"User-Agent":USER_AGENT})
-                parts.append(f"NewsAPI HTTP {r.status_code}")
-            except Exception as e:
-                parts.append(f"NewsAPI error: {e}")
-        else:
-            parts.append("NewsAPI not configured")
-        return "\n".join(parts)
-
-class NewsSentiment:
-    @staticmethod
-    def score(symbol):
-        if not NEWS_API_KEY:
-            return 0.0
-        q = symbol.replace("USDT","").replace("=","")
-        try:
-            r = requests.get("https://newsapi.org/v2/everything", params={"q":q,"pageSize":5,"apiKey":NEWS_API_KEY}, timeout=8, headers={"User-Agent":USER_AGENT})
-            r.raise_for_status()
-            j = r.json()
-            arts = j.get("articles",[])
-            if not arts:
-                return 0.0
-            return float(sum(TextBlob(a.get("title","")).sentiment.polarity for a in arts)/max(1,len(arts)))
-        except Exception:
-            return 0.0
-
-class Indicators:
-    @staticmethod
-    def enrich(df):
-        if df is None or df.empty:
-            return pd.DataFrame()
-        if df.shape[0] < MIN_CANDLES:
-            return pd.DataFrame()
-        dfc = df.copy().reset_index(drop=True)
-        try:
-            dfc["RSI"] = ta.momentum.RSIIndicator(dfc["c"],14).rsi()
-            dfc["MACD"] = ta.trend.MACD(dfc["c"]).macd_diff()
-            dfc["ATR"] = ta.volatility.AverageTrueRange(dfc["h"],dfc["l"],dfc["c"],14).average_true_range()
-            dfc["EMA20"] = ta.trend.EMAIndicator(dfc["c"],20).ema_indicator()
-            dfc = dfc.dropna().reset_index(drop=True)
-            return dfc
-        except Exception:
-            return pd.DataFrame()
-
-class SignalEngine:
-    @staticmethod
-    def generate(df, sentiment):
-        if df.empty or df.shape[0] < 2:
-            return dict(direction="HOLD",confidence=0.0,price=0.0,sl=0.0,tp=0.0,atr=0.0)
-        last = df.iloc[-1]
-        signals = []
-        if last["RSI"] < 35 and last["MACD"] > 0:
-            signals.append("BUY")
-        elif last["RSI"] > 70 and last["MACD"] < 0:
-            signals.append("SELL")
-        if last["c"] > last["EMA20"]:
-            signals.append("BUY")
-        elif last["c"] < last["EMA20"]:
-            signals.append("SELL")
-        s_bias = "BUY" if sentiment > 0.05 else "SELL" if sentiment < -0.05 else ""
-        if s_bias:
-            signals.append(s_bias)
-        direction = "BUY" if signals.count("BUY") > signals.count("SELL") else "SELL" if signals.count("SELL") > signals.count("BUY") else "HOLD"
-        confidence = min(max(abs(last["RSI"]-50)/50 + abs(sentiment),0),1)
-        atr = float(last.get("ATR",0) or 0)
-        price = float(last["c"])
-        sl = price - atr if direction=="BUY" else price + atr
-        tp = price + atr*2 if direction=="BUY" else price - atr*2
-        return dict(direction=direction,confidence=confidence,price=price,sl=sl,tp=tp,atr=atr)
-
-class TradeMonitor:
-    open_trades = {}
-    @classmethod
-    async def watch(cls, asset, user_id, context):
-        if asset not in cls.open_trades:
-            return
-        plan = cls.open_trades[asset]
-        entry, sl, tp, direction = plan["price"], plan["sl"], plan["tp"], plan["direction"]
-        while True:
-            await asyncio.sleep(MONITOR_INTERVAL)
-            df, _ = DataSource.fetch(asset) if hasattr(DataSource.fetch,"__call__") else (pd.DataFrame(),[])
-            if df.empty:
-                continue
-            price = float(df.iloc[-1]["c"])
-            if direction == "BUY" and price < sl:
-                await context.bot.send_message(user_id, f"❗ {asset}: Price fell below stop-loss. Last Price: {round(price,6)}")
-                break
-            if direction == "SELL" and price > sl:
-                await context.bot.send_message(user_id, f"❗ {asset}: Price rose above stop-loss. Last Price: {round(price,6)}")
-                break
-            if direction == "BUY" and price > tp:
-                await context.bot.send_message(user_id, f"✅ {asset}: Take-profit hit. Last Price: {round(price,6)}")
-                break
-            if direction == "SELL" and price < tp:
-                await context.bot.send_message(user_id, f"✅ {asset}: Take-profit hit. Last Price: {round(price,6)}")
-                break
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton(k, callback_data=k)] for k in ALL_ASSETS]
-    await update.message.reply_text("Select Asset (Crypto/Forex):", reply_markup=InlineKeyboardMarkup(kb))
-
-async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    asset = q.data
-    await q.edit_message_text(f"Analyzing {asset} ...")
-    if asset in CRYPTOS:
-        df, diagnostics = DataSource.fetch_crypto(asset)
-    else:
-        df, diagnostics = DataSource.fetch_forex(asset)
-    if df.empty:
-        diag_text = "\n".join(diagnostics) if isinstance(diagnostics, list) else str(diagnostics)
-        reason = DataSource.diagnose(asset)
-        await q.edit_message_text(f"❌ Market data unavailable for {asset}.\n\nFetch diagnostics:\n{diag_text}\n\nProbe diagnostics:\n{reason}")
-        return
-    df_ind = Indicators.enrich(df)
-    if df_ind.empty:
-        await q.edit_message_text(f"❌ Not enough market data ({df.shape[0]} candles).")
-        return
-    sentiment = NewsSentiment.score(asset)
-    plan = SignalEngine.generate(df_ind, sentiment)
-    msg = (f"🧠 Trade Plan\n\nAsset: {asset}\nDirection: {plan['direction']}\nEntry: {round(plan['price'],6)}\nSL: {round(plan['sl'],6)}\nTP: {round(plan['tp'],6)}\nConfidence: {round(plan['confidence']*100,1)}%\n(sentiment={round(sentiment,3)})")
-    await q.edit_message_text(msg)
-    user_id = q.from_user.id
-    if plan["direction"] in ("BUY","SELL"):
-        TradeMonitor.open_trades[asset] = {**plan,"user_id":user_id}
-        asyncio.create_task(TradeMonitor.watch(asset,user_id,context))
-
-async def diag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Running diagnostics...")
-    reports = []
-    for s in list(ALL_ASSETS):
-        try:
-            reports.append(f"{s}:\n{DataSource.diagnose(s)}")
-        except Exception as e:
-            reports.append(f"{s}:\nerror: {e}")
-    out = "\n\n".join(reports)
-    if len(out) > 3800:
-        out = out[:3800] + "\n\n...[truncated]"
-    await update.message.reply_text(out)
-
-if __name__ == "__main__":
-    if not TELEGRAM_TOKEN:
-        raise SystemExit(1)
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("diag", diag_cmd))
-    app.add_handler(CallbackQueryHandler(analyze))
-    app.run_polling()
+                r = requests.get("https://newsapi.org/v2/everything", params={"q":"bitcoin","pageSize":1,"
