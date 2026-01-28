@@ -19,7 +19,8 @@ except Exception:
     ccxt = None
 
 TELEGRAM_TOKEN = "8543111323:AAHcBtUS7dZsBl2bG74HhmPPyIoectRw8xo"
-NEWS_API_KEY = pub_d2023a3a059649e5bc3fc9ca4efa5a5e
+NEWS_API_KEY =
+"d2023a3a059649e5bc3fc9ca4efa5a5e"
 MONITOR_INTERVAL = "90"
 MIN_CANDLES = "30"
 USER_AGENT = "forex-crypto-analyzer/1.0"
