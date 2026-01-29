@@ -1,19 +1,16 @@
 import asyncio
-import requests
+import aiohttp
 import pandas as pd
 import ta
 from datetime import datetime
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 TELEGRAM_TOKEN = "8543111323:AAHcBtUS7dZsBl2bG74HhmPPyIoectRw8xo"
 TWELVEDATA_KEY = "ca1acbf0cedb4488b130c59252891c5e"
 ALPHAVANTAGE_KEY = "EOGVA134GOOP2UMU"
-
-MIN_CANDLES = 50
-MONITOR_INTERVAL = 300
-COOLDOWN = 3600
-TOP_N = 3
+MIN_CANDLES = 150
+MONITOR_INTERVAL = 90
 USER_AGENT = "crypto-analyzer/3.0"
 
 CRYPTOS = {
@@ -24,56 +21,57 @@ CRYPTOS = {
     "TRXUSDT":"TRX/USD","ATOMUSDT":"ATOM/USD","UNIUSDT":"UNI/USD"
 }
 
-TradeMonitorOpen = {}
-LastSignalTime = {}
+USER_MODE = {}
 
-def fetch_twelvedata(symbol, interval):
+async def fetch_twelvedata(session, symbol, interval):
     try:
-        r = requests.get(
-            "https://api.twelvedata.com/time_series",
-            params={"symbol":CRYPTOS[symbol],"interval":interval,"outputsize":500,"apikey":TWELVEDATA_KEY},
-            headers={"User-Agent":USER_AGENT}, timeout=12
-        )
-        j = r.json()
-        if "values" not in j or not j["values"]:
-            return fetch_alphavantage(symbol)
-        rows = []
-        for v in reversed(j["values"]):
-            rows.append({
+        url = "https://api.twelvedata.com/time_series"
+        params = {
+            "symbol": CRYPTOS[symbol],
+            "interval": interval,
+            "outputsize": 500,
+            "apikey": TWELVEDATA_KEY
+        }
+        async with session.get(url, params=params, headers={"User-Agent": USER_AGENT}, timeout=12) as r:
+            j = await r.json()
+            if "values" not in j or not j["values"]:
+                return await fetch_alphavantage(session, symbol)
+            rows = [{
                 "time": pd.to_datetime(v["datetime"]),
                 "o": float(v["open"]),
                 "h": float(v["high"]),
                 "l": float(v["low"]),
                 "c": float(v["close"]),
                 "v": float(v.get("volume", 0))
-            })
-        return pd.DataFrame(rows)
+            } for v in reversed(j["values"])]
+            return pd.DataFrame(rows)
     except:
-        return fetch_alphavantage(symbol)
+        return await fetch_alphavantage(session, symbol)
 
-def fetch_alphavantage(symbol):
+async def fetch_alphavantage(session, symbol):
     try:
         base = symbol.replace("USDT","")
-        r = requests.get(
-            "https://www.alphavantage.co/query",
-            params={"function":"DIGITAL_CURRENCY_INTRADAY","symbol":base,"market":"USD","apikey":ALPHAVANTAGE_KEY},
-            headers={"User-Agent":USER_AGENT}, timeout=12
-        )
-        j = r.json()
-        ts_key = next((x for x in j if "Time Series" in x), None)
-        if not ts_key or not j[ts_key]:
-            return pd.DataFrame()
-        rows = []
-        for t,v in j[ts_key].items():
-            rows.append({
+        url = "https://www.alphavantage.co/query"
+        params = {
+            "function":"DIGITAL_CURRENCY_INTRADAY",
+            "symbol": base,
+            "market":"USD",
+            "apikey": ALPHAVANTAGE_KEY
+        }
+        async with session.get(url, params=params, headers={"User-Agent": USER_AGENT}, timeout=12) as r:
+            j = await r.json()
+            ts_key = next((x for x in j if "Time Series" in x), None)
+            if not ts_key or not j[ts_key]:
+                return pd.DataFrame()
+            rows = [{
                 "time": pd.to_datetime(t),
                 "o": float(v.get("1a. open (USD)",0)),
                 "h": float(v.get("2. high (USD)",0)),
                 "l": float(v.get("3. low (USD)",0)),
                 "c": float(v.get("4a. close (USD)",0)),
                 "v": 0
-            })
-        return pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
+            } for t,v in j[ts_key].items()]
+            return pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
     except:
         return pd.DataFrame()
 
@@ -97,81 +95,88 @@ class Indicators:
         return df.dropna()
 
 class MultiTimeframeEngine:
-    def analyze(symbol):
-        timeframes = ["5min","15min","1h"]
-        sl_mult, tp_mult = 1.5, 3
-        best_signal = None
-        best_score = 0
-        for tf in timeframes:
-            df = fetch_twelvedata(symbol, tf)
-            if df.empty or len(df) < 50:
-                continue
+    async def analyze(symbol):
+        async with aiohttp.ClientSession() as session:
+            df = await fetch_twelvedata(session, symbol, "5min")
+            if df.empty or df.shape[0] < MIN_CANDLES:
+                return None
             df = Indicators.enrich(df)
             if df.empty:
-                continue
+                return None
             last = df.iloc[-1]
+            bullish = (
+                last["EMA50"] > last["EMA200"] and
+                last["RSI"] > 55 and
+                last["MACD"] > 0 and
+                last["ADX"] > 20 and
+                last["c"] > last["VWAP"] and
+                last["ST"] > 50 and
+                last["c"] > last["ICHIMOKU"] and
+                last["VOL_SPIKE"]
+            )
+            bearish = (
+                last["EMA50"] < last["EMA200"] and
+                last["RSI"] < 45 and
+                last["MACD"] < 0 and
+                last["ADX"] > 20 and
+                last["c"] < last["VWAP"] and
+                last["ST"] < 50 and
+                last["c"] < last["ICHIMOKU"] and
+                last["VOL_SPIKE"]
+            )
+            if bullish:
+                direction = "BUY"
+            elif bearish:
+                direction = "SELL"
+            else:
+                return None
             price = float(last["c"])
             atr = float(last["ATR"])
-            score_buy = sum([
-                last["EMA50"] > last["EMA200"],
-                last["RSI"] > 55,
-                last["MACD"] > 0,
-                last["ADX"] > 20,
-                last["c"] > last["VWAP"],
-                last["ST"] > 50,
-                last["c"] > last["ICHIMOKU"],
-                last["VOL_SPIKE"]
-            ])
-            score_sell = 8 - score_buy
-            if score_buy >= 6 and score_buy > best_score:
-                best_signal = ("BUY", price, price - atr*sl_mult, price + atr*tp_mult, score_buy/8)
-                best_score = score_buy
-            elif score_sell >= 6 and score_sell > best_score:
-                best_signal = ("SELL", price, price + atr*sl_mult, price - atr*tp_mult, score_sell/8)
-                best_score = score_sell
-        return best_signal
+            sl = price - atr*1.6 if direction=="BUY" else price + atr*1.6
+            tp = price + atr*3.2 if direction=="BUY" else price - atr*3.2
+            return direction, price, sl, tp, 0.92
 
-async def live_monitor(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
-    now = datetime.utcnow()
-    signals = []
-    for asset in CRYPTOS:
-        last_time = LastSignalTime.get(asset, datetime.min)
-        if (now - last_time).total_seconds() < COOLDOWN:
-            continue
-        if asset in TradeMonitorOpen:
-            continue
-        result = MultiTimeframeEngine.analyze(asset)
-        if result:
-            direction, price, sl, tp, conf = result
-            signals.append((conf, asset, direction, price, sl, tp))
-    signals.sort(reverse=True)
-    for signal in signals[:TOP_N]:
-        conf, asset, direction, price, sl, tp = signal
-        TradeMonitorOpen[asset] = {"direction":direction,"sl":sl,"tp":tp}
-        LastSignalTime[asset] = now
-        msg = f"🚀 New Signal\n{asset}: {direction}\nEntry: {price:.2f} SL: {sl:.2f} TP: {tp:.2f} Confidence: {int(conf*100)}%"
-        await context.bot.send_message(chat_id, msg)
-    remove_assets = []
-    for asset, plan in TradeMonitorOpen.items():
-        df = fetch_twelvedata(asset,"5min")
-        if df.empty:
-            continue
-        price = float(df.iloc[-1]["c"])
-        if plan["direction"]=="BUY" and (price<=plan["sl"] or price>=plan["tp"]):
-            await context.bot.send_message(chat_id,f"{asset} closed at {price}")
-            remove_assets.append(asset)
-        elif plan["direction"]=="SELL" and (price>=plan["sl"] or price<=plan["tp"]):
-            await context.bot.send_message(chat_id,f"{asset} closed at {price}")
-            remove_assets.append(asset)
-    for a in remove_assets:
-        TradeMonitorOpen.pop(a,None)
+class TradeMonitor:
+    open_trades = {}
+    @staticmethod
+    async def watch(asset,user_id,context):
+        while asset in TradeMonitor.open_trades:
+            await asyncio.sleep(MONITOR_INTERVAL)
+            async with aiohttp.ClientSession() as session:
+                df = await fetch_twelvedata(session, asset, "5min")
+                if df.empty:
+                    continue
+                price = float(df.iloc[-1]["c"])
+                plan = TradeMonitor.open_trades[asset]
+                if plan["direction"]=="BUY" and (price<=plan["sl"] or price>=plan["tp"]):
+                    await context.bot.send_message(user_id,f"{asset} closed at {price}")
+                    TradeMonitor.open_trades.pop(asset,None)
+                if plan["direction"]=="SELL" and (price>=plan["sl"] or price<=plan["tp"]):
+                    await context.bot.send_message(user_id,f"{asset} closed at {price}")
+                    TradeMonitor.open_trades.pop(asset,None)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📡 Strong crypto signals activated, top 3 per interval...")
-    context.job_queue.run_repeating(live_monitor, interval=MONITOR_INTERVAL, first=1, chat_id=update.effective_chat.id)
+async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
+    kb = [[InlineKeyboardButton(k,callback_data=k)] for k in CRYPTOS]
+    await update.message.reply_text("Select Asset:",reply_markup=InlineKeyboardMarkup(kb))
+
+async def analyze(update:Update,context:ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    asset = q.data
+    await q.edit_message_text(f"Analyzing {asset}...")
+    result = await MultiTimeframeEngine.analyze(asset)
+    if not result:
+        await q.edit_message_text(f"No high-probability setup for {asset} or data unavailable")
+        return
+    direction, price, sl, tp, conf = result
+    await q.edit_message_text(
+        f"🚀 Trade Signal\n\nAsset: {asset}\nDirection: {direction}\nEntry: {price}\nSL: {sl}\nTP: {tp}\nConfidence: {int(conf*100)}%"
+    )
+    TradeMonitor.open_trades[asset] = {"direction":direction,"sl":sl,"tp":tp}
+    asyncio.create_task(TradeMonitor.watch(asset,q.from_user.id,context))
 
 if __name__=="__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start",start))
+    app.add_handler(CallbackQueryHandler(analyze))
     app.run_polling()
