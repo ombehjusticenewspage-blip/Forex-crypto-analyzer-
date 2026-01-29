@@ -9,6 +9,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 
 TELEGRAM_TOKEN = "8543111323:AAHcBtUS7dZsBl2bG74HhmPPyIoectRw8xo"
 TWELVEDATA_KEY = "ca1acbf0cedb4488b130c59252891c5e"
+ALPHAVANTAGE_KEY = "EOGVA134GOOP2UMU"
 
 MIN_CANDLES = 150
 MONITOR_INTERVAL = 90
@@ -38,24 +39,58 @@ def fetch_twelvedata(symbol, interval):
             timeout=12
         )
         j = r.json()
-        if "values" not in j:
-            return pd.DataFrame()
+        if "values" not in j or not j["values"]:
+            return fetch_alphavantage(symbol)
         rows = []
         for v in reversed(j["values"]):
             rows.append({
-                "time":pd.to_datetime(v["datetime"]),
-                "o":float(v["open"]),
-                "h":float(v["high"]),
-                "l":float(v["low"]),
-                "c":float(v["close"]),
-                "v":float(v.get("volume",0))
+                "time": pd.to_datetime(v["datetime"]),
+                "o": float(v["open"]),
+                "h": float(v["high"]),
+                "l": float(v["low"]),
+                "c": float(v["close"]),
+                "v": float(v.get("volume", 0))
             })
         return pd.DataFrame(rows)
+    except:
+        return fetch_alphavantage(symbol)
+
+def fetch_alphavantage(symbol):
+    try:
+        base = symbol.replace("USDT","")
+        r = requests.get(
+            "https://www.alphavantage.co/query",
+            params={
+                "function":"DIGITAL_CURRENCY_INTRADAY",
+                "symbol":base,
+                "market":"USD",
+                "apikey":ALPHAVANTAGE_KEY
+            },
+            headers={"User-Agent":USER_AGENT},
+            timeout=12
+        )
+        j = r.json()
+        ts_key = next((x for x in j if "Time Series" in x), None)
+        if not ts_key or not j[ts_key]:
+            return pd.DataFrame()
+        rows = []
+        for t,v in j[ts_key].items():
+            rows.append({
+                "time": pd.to_datetime(t),
+                "o": float(v.get("1a. open (USD)",0)),
+                "h": float(v.get("2. high (USD)",0)),
+                "l": float(v.get("3. low (USD)",0)),
+                "c": float(v.get("4a. close (USD)",0)),
+                "v": 0
+            })
+        return pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
     except:
         return pd.DataFrame()
 
 class Indicators:
     def enrich(df):
+        if df.empty or len(df) < 50:
+            return pd.DataFrame()
         df = df.copy().reset_index(drop=True)
         df["RSI"] = ta.momentum.RSIIndicator(df["c"],14).rsi()
         macd = ta.trend.MACD(df["c"])
@@ -79,17 +114,16 @@ class MultiTimeframeEngine:
         else:
             timeframes = ["15min","1h"]
             sl_mult, tp_mult = 1.6, 3.2
-
         directions = []
         price = atr = None
-
         for tf in timeframes:
             df = fetch_twelvedata(symbol, tf)
-            if df.shape[0] < MIN_CANDLES:
+            if df.empty or df.shape[0] < MIN_CANDLES:
                 return None
             df = Indicators.enrich(df)
+            if df.empty:
+                return None
             last = df.iloc[-1]
-
             bullish = (
                 last["EMA50"] > last["EMA200"] and
                 last["RSI"] > 55 and
@@ -100,7 +134,6 @@ class MultiTimeframeEngine:
                 last["c"] > last["ICHIMOKU"] and
                 last["VOL_SPIKE"]
             )
-
             bearish = (
                 last["EMA50"] < last["EMA200"] and
                 last["RSI"] < 45 and
@@ -111,51 +144,43 @@ class MultiTimeframeEngine:
                 last["c"] < last["ICHIMOKU"] and
                 last["VOL_SPIKE"]
             )
-
             if bullish:
                 directions.append("BUY")
             elif bearish:
                 directions.append("SELL")
             else:
                 return None
-
             price = float(last["c"])
             atr = float(last["ATR"])
-
         if not all(d == directions[0] for d in directions):
             return None
-
         direction = directions[0]
         sl = price - atr*sl_mult if direction=="BUY" else price + atr*sl_mult
         tp = price + atr*tp_mult if direction=="BUY" else price - atr*tp_mult
-
         return direction, price, sl, tp, 0.92
 
 class Backtester:
     def run(symbol, mode):
         df = fetch_twelvedata(symbol,"5min")
-        if df.shape[0] < MIN_CANDLES:
+        if df.empty or df.shape[0] < MIN_CANDLES:
             return None
-
         df = Indicators.enrich(df)
+        if df.empty:
+            return None
         wins = losses = 0
-
         for i in range(200, len(df)):
             slice_df = df.iloc[:i]
             result = MultiTimeframeEngine.analyze(symbol, mode)
             if not result:
                 continue
-
             direction, entry, sl, tp, _ = result
             price = df.iloc[i]["c"]
-
             if direction == "BUY":
                 wins += 1 if price >= tp else 0
                 losses += 1 if price <= sl else 0
             else:
                 wins += 1 if price <= tp else 0
                 losses += 1 if price >= sl else 0
-
         total = wins + losses
         winrate = (wins / total * 100) if total > 0 else 0
         return wins, losses, winrate
@@ -199,7 +224,7 @@ async def analyze(update:Update,context:ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(f"Analyzing {asset} ({mode})...")
     result = MultiTimeframeEngine.analyze(asset,mode)
     if not result:
-        await q.edit_message_text(f"No high-probability setup for {asset}")
+        await q.edit_message_text(f"No high-probability setup for {asset} or data unavailable")
         return
     direction,price,sl,tp,conf = result
     await q.edit_message_text(
