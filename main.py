@@ -511,7 +511,7 @@ class SignalEngine:
         return dict(direction=direction,confidence=confidence,price=price,sl=sl,tp=tp,atr=atr)
 
 class TradeMonitor:
-    open_trades = {}'
+    open_trades = {}
     async def watch(cls, asset, user_id, context):
         if asset not in cls.open_trades:
             return
