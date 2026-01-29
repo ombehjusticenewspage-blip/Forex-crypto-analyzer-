@@ -19,11 +19,14 @@ except Exception:
     ccxt = None
 
 TELEGRAM_TOKEN = "8543111323:AAHcBtUS7dZsBl2bG74HhmPPyIoectRw8xo"
-BINANCE_API= "NVU6UUkhCeN9kpLIBPOgGzXm8QjXOxMCGaqJtEnGGtuz2bWD9tdlBCKrhk06WakB"
-BINANCE_SECRET_KEY= "wz8jWiSDH4iwx9mdUmcAVUAGdwt49eWlPGX2KzIp1dxvruTuW5VGsjFtXxe6jfK2"
+BINANCE_API_KEY = "NVU6UUkhCeN9kpLIBPOgGzXm8QjXOxMCGaqJtEnGGtuz2bWD9tdlBCKrhk06WakB"
+BINANCE_API_SECRET = "wz8jWiSDH4iwx9mdUmcAVUAGdwt49eWlPGX2KzIp1dxvruTuW5VGsjFtXxe6jfK2"
+ALPHAVANTAGE_KEY = "EOGVA134GOOP2UMU"
+TWELVEDATA_KEY = "ca1acbf0cedb4488b130c59252891c5e"
+FINNHUB_KEY = "d5tkpo9r01qt62njv800d5tkpo9r01qt62njv80g"
 NEWS_API_KEY = "d2023a3a059649e5bc3fc9ca4efa5a5e"
-MONITOR_INTERVAL = "90"
-MIN_CANDLES = "30"
+MONITOR_INTERVAL =  "90"
+MIN_CANDLES =  "30"
 USER_AGENT = "forex-crypto-analyzer/1.0"
 
 CRYPTOS = {"BTCUSDT":"bitcoin","ETHUSDT":"ethereum","BNBUSDT":"binancecoin","XRPUSDT":"ripple","SOLUSDT":"solana"}
@@ -508,7 +511,7 @@ class SignalEngine:
         return dict(direction=direction,confidence=confidence,price=price,sl=sl,tp=tp,atr=atr)
 
 class TradeMonitor:
-    open_trades = {}
+    open_trades = {}'
     async def watch(cls, asset, user_id, context):
         if asset not in cls.open_trades:
             return
