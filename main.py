@@ -1,4 +1,4 @@
-import aiohttp, asyncio, pandas as pd, ta
+import aiohttp, asyncio, pandas as pd, ta, datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -7,6 +7,7 @@ TWELVEDATA_KEY = "ca1acbf0cedb4488b130c59252891c5e"
 
 MIN_CANDLES = 120
 MIN_ATR_PCT = 0.3
+MIN_BACKTEST_WR = 55
 SCAN_INTERVAL = 180
 TRACK_INTERVAL = 60
 
@@ -20,6 +21,10 @@ CRYPTOS = {
 
 active_trades = {}
 stats = {"wins":0,"losses":0,"be":0}
+
+def session_ok():
+    h = datetime.datetime.utcnow().hour
+    return 7 <= h <= 20
 
 async def fetch(session, symbol, interval="15min"):
     try:
@@ -47,10 +52,30 @@ def enrich(df):
     df["ATR"]=ta.volatility.AverageTrueRange(df["h"],df["l"],df["c"]).average_true_range()
     return df.dropna()
 
+def backtest_score(df):
+    wins=0; losses=0
+    for i in range(50,len(df)-5):
+        r=df.iloc[i]
+        s=0
+        s+=2 if r["EMA50"]>r["EMA200"] else -2
+        s+=1 if r["RSI"]>55 else -1 if r["RSI"]<45 else 0
+        s+=1 if r["MACD"]>0 else -1
+        s+=1 if r["ADX"]>20 else 0
+        if s>=3:
+            if df["c"].iloc[i+3]>r["c"]: wins+=1
+            else: losses+=1
+        if s<=-3:
+            if df["c"].iloc[i+3]<r["c"]: wins+=1
+            else: losses+=1
+    t=wins+losses
+    return (wins/t)*100 if t else 0
+
 def signal(df):
     last=df.iloc[-1]
     atr_pct=(last["ATR"]/last["c"])*100
     if atr_pct < MIN_ATR_PCT:
+        return None
+    if backtest_score(df) < MIN_BACKTEST_WR:
         return None
     s=0
     s+=2 if last["EMA50"]>last["EMA200"] else -2
@@ -63,7 +88,16 @@ def signal(df):
     p=last["c"]; atr=last["ATR"]
     return {"dir":d,"entry":p,"sl":p-atr*1.5 if d=="BUY" else p+atr*1.5,"tp":p+atr*3 if d=="BUY" else p-atr*3,"atr":atr,"score":s,"be":False}
 
+async def btc_trend(session):
+    df=enrich(await fetch(session,"BTCUSDT"))
+    if df.empty: return None
+    r=df.iloc[-1]
+    return "BUY" if r["EMA50"]>r["EMA200"] else "SELL"
+
 async def multi_tf_signal(session, symbol):
+    if not session_ok():
+        return None
+    btc_dir = await btc_trend(session)
     df15 = enrich(await fetch(session,symbol,"15min"))
     df5 = enrich(await fetch(session,symbol,"5min"))
     if df15.empty or df5.empty:
@@ -72,9 +106,11 @@ async def multi_tf_signal(session, symbol):
     sig5 = signal(df5)
     if not sig15 or not sig5:
         return None
-    if sig15["dir"]==sig5["dir"]:
-        return sig15
-    return None
+    if sig15["dir"]!=sig5["dir"]:
+        return None
+    if symbol!="BTCUSDT" and sig15["dir"]!=btc_dir:
+        return None
+    return sig15
 
 async def scan(context):
     signals=[]
