@@ -13,7 +13,7 @@ NEWS_API_KEY = "qDGIzb9o2OttTxWNvBLMDyZD9KbdQ0qaPHvupsjH"
 MIN_CANDLES = 150
 MIN_ATR_PCT = 0.3
 MIN_BACKTEST_WR = 55
-SCAN_INTERVAL = 180
+SCAN_INTERVAL = 3600
 TRACK_INTERVAL = 60
 NEWS_LIMIT = 10
 MIN_VOLUME_USD = 500000
@@ -23,7 +23,12 @@ CRYPTOS = {
     "XRPUSDT":"XRP/USD","SOLUSDT":"SOL/USD","ADAUSDT":"ADA/USD",
     "DOGEUSDT":"DOGE/USD","AVAXUSDT":"AVAX/USD","DOTUSDT":"DOT/USD",
     "MATICUSDT":"MATIC/USD","LTCUSDT":"LTC/USD","LINKUSDT":"LINK/USD",
-    "TRXUSDT":"TRX/USD","ATOMUSDT":"ATOM/USD","UNIUSDT":"UNI/USD"
+    "TRXUSDT":"TRX/USD","ATOMUSDT":"ATOM/USD","UNIUSDT":"UNI/USD",
+    "SHIBUSDT":"SHIB/USD","FTMUSDT":"FTM/USD","NEARUSDT":"NEAR/USD",
+    "AAVEUSDT":"AAVE/USD","EOSUSDT":"EOS/USD","XLMUSDT":"XLM/USD",
+    "SUSHIUSDT":"SUSHI/USD","ALGOUSDT":"ALGO/USD","CHZUSDT":"CHZ/USD",
+    "KSMUSDT":"KSM/USD","ZILUSDT":"ZIL/USD","ENJUSDT":"ENJ/USD",
+    "GRTUSDT":"GRT/USD","BATUSDT":"BAT/USD","RVNUSDT":"RVN/USD"
 }
 
 active_trades = {}
@@ -196,23 +201,49 @@ async def scan(context):
     signals=[]
     async with aiohttp.ClientSession() as s:
         for sym in CRYPTOS:
-            if sym in active_trades: continue
-            sig=await multi_tf_signal(s,sym)
-            if sig: signals.append((sym,sig))
-    signals.sort(key=lambda x: abs(x[1]["score"]),reverse=True)
-    top3=signals[:3]
+            if sym in active_trades: 
+                continue
+            
+            df = await fetch(s, sym, "1h")
+            if df.empty: 
+                continue
+            df_enriched = enrich(df)
+            if df_enriched.empty: 
+                continue
+            last = df_enriched.iloc[-1]
+            atr_pct = (last["ATR"]/last["c"])*100
+            if atr_pct < MIN_ATR_PCT:  
+                continue
+            
+            news = await fetch_news(s, sym)
+            news_sent = sentiment_score(news)
+            if abs(news_sent) > 0.5: 
+                continue
+            
+            sig = await multi_tf_signal(s, sym)
+            if sig: 
+                signals.append((sym, sig))
+                
+    signals.sort(key=lambda x: abs(x[1]["score"]), reverse=True)
+    top3 = signals[:3]
+    
     if top3:
-        msg="🚀 TOP CRYPTO SIGNALS\n\n"
+        msg = "🚀 TOP CRYPTO SIGNALS\n\n"
         async with aiohttp.ClientSession() as s:
-            for i,(sym,s) in enumerate(top3,1):
-                news=await fetch_news(s,sym)
-                msg+=f"{i}. {sym}\nDir: {s['dir']}\nEntry: {round(s['entry'],5)}\nSL: {round(s['sl'],5)}\nTP: {round(s['tp'],5)}\nScore: {s['score']}\n"
+            for i, (sym, sgn) in enumerate(top3, 1):
+                news = await fetch_news(s, sym)
+                msg += f"{i}. {sym}\nDir: {sgn['dir']}\nEntry: {round(sgn['entry'],5)}\nSL: {round(sgn['sl'],5)}\nTP: {round(sgn['tp'],5)}\nScore: {sgn['score']}\n"
                 if news:
-                    msg+="📰 News:\n"
-                    for n in news: msg+=f"{n['title']}\n{n['url']}\n"
-                msg+="\n"
-        await context.bot.send_message(chat_id=context.job.chat_id,text=msg)
-        for sym,s in top3: active_trades[sym]=s
+                    msg += "📰 News:\n"
+                    for n in news:
+                        msg += f"{n['title']}\n{n['url']}\n"
+                msg += "\n"
+                if sgn["score"] >= 3:
+                    with open("winning_coins.log","a") as f:
+                        f.write(f"{datetime.datetime.utcnow()} - {sym} - {sgn['dir']} - Entry: {sgn['entry']}\n")
+        await context.bot.send_message(chat_id=context.job.chat_id, text=msg)
+        for sym, sgn in top3:
+            active_trades[sym] = sgn
 
 async def track(context):
     async with aiohttp.ClientSession() as s:
@@ -255,6 +286,7 @@ async def top3_now(context, chat_id):
         msg += f"{i}. {sym}\n"
 
     await context.bot.send_message(chat_id=chat_id, text=msg)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton(k, callback_data=k)] for k in CRYPTOS]
     kb.append([InlineKeyboardButton("🔥 Top 3 Best Signals", callback_data="TOP3")])
@@ -289,8 +321,8 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += f"{n['title']}\n{n['url']}\n"
         await q.edit_message_text(msg)
 
-if __name__=="__main__":
-    app=ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start",start))
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(analyze_callback))
     app.run_polling()
