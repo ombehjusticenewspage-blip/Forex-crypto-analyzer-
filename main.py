@@ -19,7 +19,7 @@ NEWS_LIMIT = 10
 MIN_VOLUME_USD = 500000
 
 CRYPTOS = {
-    "BTCUSDT":"BTC/USD","ETHUSDT":"ETH/USD","BNBUSDT":"BNB/USD",
+    "ETHUSDT":"ETH/USD","BNBUSDT":"BNB/USD",
     "XRPUSDT":"XRP/USD","SOLUSDT":"SOL/USD","ADAUSDT":"ADA/USD",
     "DOGEUSDT":"DOGE/USD","AVAXUSDT":"AVAX/USD","DOTUSDT":"DOT/USD",
     "MATICUSDT":"MATIC/USD","LTCUSDT":"LTC/USD","LINKUSDT":"LINK/USD",
@@ -149,10 +149,22 @@ def online_train(df, news_sent=0):
 
 def signal(df, news_sentiment=0, weight=1):
     last=df.iloc[-1]
-    if last["VOLUSD"]<MIN_VOLUME_USD: return None
-    atr_pct=(last["ATR"]/last["c"])*100
-    if atr_pct<MIN_ATR_PCT: return None
-    if backtest_score(df)<MIN_BACKTEST_WR: return None
+    reasons=[]
+
+    if last["VOLUSD"] < MIN_VOLUME_USD:
+        reasons.append(f"Low volume: {last['VOLUSD']:.0f} USD")
+        return {"signal": None, "reasons": reasons}
+
+    atr_pct = (last["ATR"]/last["c"])*100
+    if atr_pct < MIN_ATR_PCT:
+        reasons.append(f"ATR too low: {atr_pct:.2f}%")
+        return {"signal": None, "reasons": reasons}
+
+    bt_score = backtest_score(df)
+    if bt_score < MIN_BACKTEST_WR:
+        reasons.append(f"Backtest WR too low: {bt_score:.2f}%")
+        return {"signal": None, "reasons": reasons}
+
     s=0
     s+=2.5 if last["EMA50"]>last["EMA200"] else -2.5
     s+=1.2 if last["RSI"]>55 else -1.2 if last["RSI"]<45 else 0
@@ -165,31 +177,29 @@ def signal(df, news_sentiment=0, weight=1):
     s+=1 if last["OBV"]>0 else -1
     s+=1.5 if news_sentiment>0.05 else -1.5 if news_sentiment<-0.05 else 0
     s*=weight
+
     features=np.array([last["RSI"], last["EMA50"], last["EMA200"], last["MACD"], last["ADX"], last["ATR"],
                        last["BOLL_H"], last["BOLL_L"], last["STOCH_K"], last["CCI"], last["MFI"], last["OBV"],
                        last["VOLUSD"], news_sentiment]).reshape(1,-1)
     features_scaled=ml_scaler.fit_transform(features)
     pred=ml_model.predict(features_scaled) if hasattr(ml_model,"coef_") else 0
     s+=pred[0] if pred is not None else 0
+
     if s>=3: d="BUY"
     elif s<=-3: d="SELL"
-    else: return None
+    else:
+        reasons.append("Score not strong enough")
+        return {"signal": None, "reasons": reasons}
+
     p=last["c"]; atr=last["ATR"]
     sl_offset = atr*1.5*np.clip(1+atr_pct/10,1,2)
     tp_offset = atr*3*np.clip(1+atr_pct/10,1,2)
     return {"dir":d,"entry":p,"sl":p-sl_offset if d=="BUY" else p+sl_offset,
-            "tp":p+tp_offset if d=="BUY" else p-tp_offset,"atr":atr,"score":s,"be":False}
-
-async def btc_trend(session):
-    df=enrich(await fetch(session,"BTCUSDT"))
-    if df.empty: return None
-    r=df.iloc[-1]
-    return "BUY" if r["EMA50"]>r["EMA200"] else "SELL"
+            "tp":p+tp_offset if d=="BUY" else p-tp_offset,"atr":atr,"score":s,"be":False,"reasons": reasons}
 
 async def multi_tf_signal(session,symbol):
     if not session_ok(): return None
-    btc_dir=await btc_trend(session)
-    timeframes=[("1min",0.5),("5min",1),("15min",1.5),("1h",2),("5h",3),("1d",4)]
+    timeframes=[("1min",0.5),("5min",1),("15min",1.5),("1h",2),("5h",3)]
     dfs=[]
     for tf,_ in timeframes: dfs.append(enrich(await fetch(session,symbol,tf)))
     if any(df.empty for df in dfs): return None
@@ -204,7 +214,6 @@ async def multi_tf_signal(session,symbol):
         sigs.append(s)
         dirs.append(s["dir"])
     if len(set(dirs))>1: return None
-    if symbol!="BTCUSDT" and dirs[0]!=btc_dir: return None
     return sigs[0]
 
 async def scan(context):
@@ -245,6 +254,8 @@ async def scan(context):
                     msg += "📰 News:\n"
                     for n in news:
                         msg += f"{n['title']}\n{n['url']}\n"
+                if sgn["reasons"]:
+                    msg += "⚠️ Rejection Reasons:\n" + "\n".join(sgn["reasons"]) + "\n"
                 msg += "\n"
                 if sgn["score"] >= 3:
                     with open("winning_coins.log","a") as f:
@@ -299,7 +310,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton(k, callback_data=k)] for k in CRYPTOS]
     kb.append([InlineKeyboardButton("🔥 Top 3 Best Signals", callback_data="TOP3")])
 
-    await update.message.reply_text(
+await update.message.reply_text(
         "📡 Click crypto to analyze or wait for top signals:",
         reply_markup=InlineKeyboardMarkup(kb)
     )
