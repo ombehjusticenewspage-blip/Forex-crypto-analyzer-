@@ -310,13 +310,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton(k, callback_data=k)] for k in CRYPTOS]
     kb.append([InlineKeyboardButton("🔥 Top 3 Best Signals", callback_data="TOP3")])
 
-await update.message.reply_text(
-    "📡 Click crypto to analyze or wait for top signals:",
-    reply_markup=InlineKeyboardMarkup(kb)
-)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [[InlineKeyboardButton(k, callback_data=k)] for k in CRYPTOS]
+    kb.append([InlineKeyboardButton("🔥 Top 3 Best Signals", callback_data="TOP3")])
 
-context.job_queue.run_repeating(scan, SCAN_INTERVAL, chat_id=update.effective_chat.id)
-context.job_queue.run_repeating(track, TRACK_INTERVAL, chat_id=update.effective_chat.id)
+    await update.message.reply_text(
+        "📡 Click crypto to analyze or wait for top signals:",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
+  
+      context.job_queue.run_repeating(scan, SCAN_INTERVAL, chat_id=update.effective_chat.id)
+    context.job_queue.run_repeating(track, TRACK_INTERVAL, chat_id=update.effective_chat.id)
 
 async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ...
