@@ -36,6 +36,16 @@ stats = {"wins":0,"losses":0,"be":0}
 ml_scaler = StandardScaler()
 ml_model = SGDClassifier(max_iter=1000, tol=1e-3)
 
+def evaluate_signal(score):
+    if score >= 3:
+        return "Strong Signal 🚀"
+    elif score >= 2:
+        return "Moderate Signal ⚡"
+    elif score >= 1:
+        return "Weak Signal ⚠️"
+    else:
+        return "No strong signals right now"
+
 def session_ok():
     h = datetime.datetime.utcnow().hour
     return 7 <= h <= 20
@@ -203,7 +213,6 @@ async def scan(context):
         for sym in CRYPTOS:
             if sym in active_trades: 
                 continue
-            
             df = await fetch(s, sym, "1h")
             if df.empty: 
                 continue
@@ -214,25 +223,24 @@ async def scan(context):
             atr_pct = (last["ATR"]/last["c"])*100
             if atr_pct < MIN_ATR_PCT:  
                 continue
-            
             news = await fetch_news(s, sym)
             news_sent = sentiment_score(news)
             if abs(news_sent) > 0.5: 
                 continue
-            
             sig = await multi_tf_signal(s, sym)
             if sig: 
                 signals.append((sym, sig))
-                
+
     signals.sort(key=lambda x: abs(x[1]["score"]), reverse=True)
     top3 = signals[:3]
-    
+
     if top3:
         msg = "🚀 TOP CRYPTO SIGNALS\n\n"
         async with aiohttp.ClientSession() as s:
             for i, (sym, sgn) in enumerate(top3, 1):
                 news = await fetch_news(s, sym)
-                msg += f"{i}. {sym}\nDir: {sgn['dir']}\nEntry: {round(sgn['entry'],5)}\nSL: {round(sgn['sl'],5)}\nTP: {round(sgn['tp'],5)}\nScore: {sgn['score']}\n"
+                strength = evaluate_signal(sgn["score"])
+                msg += f"{i}. {sym}\nDir: {sgn['dir']}\nEntry: {round(sgn['entry'],5)}\nSL: {round(sgn['sl'],5)}\nTP: {round(sgn['tp'],5)}\nScore: {sgn['score']}\nSignal Strength: {strength}\n"
                 if news:
                     msg += "📰 News:\n"
                     for n in news:
@@ -290,7 +298,7 @@ async def top3_now(context, chat_id):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton(k, callback_data=k)] for k in CRYPTOS]
     kb.append([InlineKeyboardButton("🔥 Top 3 Best Signals", callback_data="TOP3")])
-    
+
     await update.message.reply_text(
         "📡 Click crypto to analyze or wait for top signals:",
         reply_markup=InlineKeyboardMarkup(kb)
@@ -301,11 +309,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    
+
     if q.data == "TOP3":
         await top3_now(context, q.message.chat_id)
         return
-    
+
     sym = q.data
     async with aiohttp.ClientSession() as s:
         sig = await multi_tf_signal(s, sym)
