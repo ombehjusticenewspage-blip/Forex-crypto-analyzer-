@@ -5,7 +5,7 @@ from sklearn.preprocessing import StandardScaler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-TELEGRAM_TOKEN = "8543111323:AAHcBtUS7dZsBl2bG74HhmPPyIoectRw8xo"
+TELEGRAM_TOKEN = "8543111323:AAFc6NjDmzAr3E0WQqndWTmT8xM-PVI3z9s"
 TWELVEDATA_KEY = "ca1acbf0cedb4488b130c59252891c5e"
 ALPHAVANTAGE_KEY = "EOGVA134GOOP2UMU"
 NEWS_API_KEY = "qDGIzb9o2OttTxWNvBLMDyZD9KbdQ0qaPHvupsjH"
